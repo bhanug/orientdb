@@ -15,8 +15,9 @@ import com.orientechnologies.orient.server.OSystemDatabase;
 import com.orientechnologies.orient.server.distributed.impl.ODatabaseDocumentDistributed;
 import com.orientechnologies.orient.server.distributed.impl.ODatabaseDocumentDistributedPooled;
 import com.orientechnologies.orient.server.distributed.impl.ODistributedStorage;
+import com.orientechnologies.orient.server.distributed.impl.OIncrementOperationalLog;
 import com.orientechnologies.orient.server.distributed.impl.coordinator.ODistributedChannel;
-import com.orientechnologies.orient.server.distributed.impl.coordinator.ODistributedCoordinator;
+import com.orientechnologies.orient.server.distributed.impl.coordinator.ODatabaseCoordinator;
 import com.orientechnologies.orient.server.distributed.impl.coordinator.ODistributedMember;
 import com.orientechnologies.orient.server.distributed.impl.metadata.ODistributedContext;
 import com.orientechnologies.orient.server.distributed.impl.metadata.OSharedContextDistributed;
@@ -27,6 +28,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.Executors;
 
 /**
  * Created by tglman on 08/08/17.
@@ -38,6 +40,7 @@ public class OrientDBDistributed extends OrientDBEmbedded implements OServerAwar
   private final    Map<String, ODistributedChannel> members     = new HashMap<>();
   private volatile boolean                          coordinator = false;
   private volatile String                           coordinatorName;
+  private volatile OStructuralCoordinator           structuralCoordinator;
 
   public OrientDBDistributed(String directoryPath, OrientDBConfig config, Orient instance) {
     super(directoryPath, config, instance);
@@ -211,7 +214,7 @@ public class OrientDBDistributed extends OrientDBEmbedded implements OServerAwar
       ODistributedMember member = new ODistributedMember(nodeName, context.getStorage().getName(), channel);
       distributed.getExecutor().join(member);
       if (coordinator) {
-        ODistributedCoordinator c = distributed.getCoordinator();
+        ODatabaseCoordinator c = distributed.getCoordinator();
         if (c == null) {
           distributed.makeCoordinator(plugin.getLocalNodeName(), context);
           c = distributed.getCoordinator();
@@ -229,7 +232,7 @@ public class OrientDBDistributed extends OrientDBEmbedded implements OServerAwar
       ODistributedContext distributed = ((OSharedContextDistributed) context).getDistributedContext();
       distributed.getExecutor().leave(distributed.getExecutor().getMember(nodeName));
       if (coordinator) {
-        ODistributedCoordinator c = distributed.getCoordinator();
+        ODatabaseCoordinator c = distributed.getCoordinator();
         if (c == null) {
           c.leave(c.getMember(nodeName));
         }
@@ -255,6 +258,11 @@ public class OrientDBDistributed extends OrientDBEmbedded implements OServerAwar
             distributed.getCoordinator().join(member);
           }
         }
+        structuralCoordinator = new OStructuralCoordinator(Executors.newSingleThreadExecutor(), new OIncrementOperationalLog());
+        for (Map.Entry<String, ODistributedChannel> node : members.entrySet()) {
+          ODistributedMember member = new ODistributedMember(node.getKey(), null, node.getValue());
+          structuralCoordinator.join(member);
+        }
         coordinator = true;
       }
     } else {
@@ -264,6 +272,9 @@ public class OrientDBDistributed extends OrientDBEmbedded implements OServerAwar
         ODistributedContext distributed = ((OSharedContextDistributed) context).getDistributedContext();
         ODistributedMember member = new ODistributedMember(lockManager, context.getStorage().getName(), members.get(lockManager));
         distributed.setExternalCoordinator(member);
+      }
+      if (structuralCoordinator != null) {
+        structuralCoordinator.close();
       }
       coordinator = false;
     }
